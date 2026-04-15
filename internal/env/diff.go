@@ -2,16 +2,15 @@ package env
 
 import "fmt"
 
-// ChangeType represents the kind of change detected.
+// ChangeType represents the type of change detected.
 type ChangeType string
-
-const (
-	ChangeAdded   ChangeType = "added"
-	ChangeRemoved ChangeType = "removed"
-	ChangeUpdated ChangeType = "updated"
+(
+	Added   ChangeType = "added"
+	Removed ChangeType = "removed"
+	Changed ChangeType = "changed"
 )
 
-// Change describes a single key-level difference between two env maps.
+// Change represents a single key-level difference.
 type Change struct {
 	Key      string
 	Type     ChangeType
@@ -19,49 +18,67 @@ type Change struct {
 	NewValue string
 }
 
-// String returns a human-readable description of the change.
-func (c Change) String() string {
-	switch c.Type {
-	case ChangeAdded:
-		return fmt.Sprintf("+ %s", c.Key)
-	case ChangeRemoved:
-		return fmt.Sprintf("- %s", c.Key)
-	case ChangeUpdated:
-		return fmt.Sprintf("~ %s", c.Key)
-	default:
-		return c.Key
-	}
-}
-
 // DiffResult holds the full set of changes between two env maps.
 type DiffResult struct {
 	Changes []Change
 }
 
-// IsEmpty returns true when no changes were detected.
-func (d DiffResult) IsEmpty() bool {
+// IsEmpty returns true if there are no changes.
+func (d *DiffResult) IsEmpty() bool {
 	return len(d.Changes) == 0
 }
 
-// Diff compares an existing env map (old) against incoming secrets (new)
-// and returns a DiffResult describing what changed.
-func Diff(old, incoming map[string]string) DiffResult {
-	var changes []Change
+// Summary returns a human-readable summary of changes.
+func (d *DiffResult) Summary() string {
+	if d.IsEmpty() {
+		return "no changes"
+	}
+	var out string
+	for _, c := range d.Changes {
+		switch c.Type {
+		case Added:
+			out += fmt.Sprintf("+ %s=%q\n", c.Key, c.NewValue)
+		case Removed:
+			out += fmt.Sprintf("- %s=%q\n", c.Key, c.OldValue)
+		case Changed:
+			out += fmt.Sprintf("~ %s: %q -> %q\n", c.Key, c.OldValue, c.NewValue)
+		}
+	}
+	return out
+}
+
+// Diff computes the difference between an existing env map and a new one.
+// existing is the current state; incoming is the desired state.
+func Diff(existing, incoming map[string]string) *DiffResult {
+	result := &DiffResult{}
 
 	for k, newVal := range incoming {
-		oldVal, exists := old[k]
+		oldVal, exists := existing[k]
 		if !exists {
-			changes = append(changes, Change{Key: k, Type: ChangeAdded, NewValue: newVal})
+			result.Changes = append(result.Changes, Change{
+				Key:      k,
+				Type:     Added,
+				NewValue: newVal,
+			})
 		} else if oldVal != newVal {
-			changes = append(changes, Change{Key: k, Type: ChangeUpdated, OldValue: oldVal, NewValue: newVal})
+			result.Changes = append(result.Changes, Change{
+				Key:      k,
+				Type:     Changed,
+				OldValue: oldVal,
+				NewValue: newVal,
+			})
 		}
 	}
 
-	for k, oldVal := range old {
+	for k, oldVal := range existing {
 		if _, exists := incoming[k]; !exists {
-			changes = append(changes, Change{Key: k, Type: ChangeRemoved, OldValue: oldVal})
+			result.Changes = append(result.Changes, Change{
+				Key:      k,
+				Type:     Removed,
+				OldValue: oldVal,
+			})
 		}
 	}
 
-	return DiffResult{Changes: changes}
+	return result
 }

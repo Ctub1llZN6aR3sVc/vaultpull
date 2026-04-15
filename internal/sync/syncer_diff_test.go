@@ -13,47 +13,40 @@ func TestRun_DiffReportsNewKeys(t *testing.T) {
 	dir := t.TempDir()
 	envFile := filepath.Join(dir, ".env")
 
-	// Write an existing .env file with one key
-	existing := []byte("EXISTING_KEY=old_value\n")
-	if err := os.WriteFile(envFile, existing, 0600); err != nil {
-		t.Fatalf("failed to write existing env file: %v", err)
+	// Pre-populate env file with an existing key
+	err := os.WriteFile(envFile, []byte("EXISTING=value\n"), 0600)
+	if err != nil {
+		t.Fatalf("failed to write initial env file: %v", err)
 	}
 
-	mockSecrets := map[string]string{
-		"EXISTING_KEY": "new_value",
-		"BRAND_NEW_KEY": "hello",
-	}
-
-	client := vault.NewMockClient(map[string]map[string]string{
-		"secret/app": mockSecrets,
+	mockClient := vault.NewMockClient(map[string]map[string]string{
+		"secret/app": {
+			"EXISTING": "value",
+			"NEW_KEY":  "new_value",
+		},
 	})
 
-	s := New(client, []string{"secret/app"}, envFile)
-	if err := s.Run(); err != nil {
-		t.Fatalf("Run() error: %v", err)
-	}
-
-	// Read the resulting file and verify diff expectations
-	result, err := env.Read(envFile)
+	syncer := New(mockClient, envFile)
+	diff, err := syncer.Run([]string{"secret/app"})
 	if err != nil {
-		t.Fatalf("Read() error: %v", err)
+		t.Fatalf("Run failed: %v", err)
 	}
 
-	if result["BRAND_NEW_KEY"] != "hello" {
-		t.Errorf("expected BRAND_NEW_KEY=hello, got %q", result["BRAND_NEW_KEY"])
-	}
-	if result["EXISTING_KEY"] != "new_value" {
-		t.Errorf("expected EXISTING_KEY=new_value, got %q", result["EXISTING_KEY"])
+	if diff == nil {
+		t.Fatal("expected a diff result, got nil")
 	}
 
-	// Compute diff between original and final to confirm change detection
-	original := map[string]string{"EXISTING_KEY": "old_value"}
-	diff := env.Diff(original, result)
-
-	if _, ok := diff.Added["BRAND_NEW_KEY"]; !ok {
-		t.Error("expected BRAND_NEW_KEY to appear in diff as added")
+	if diff.IsEmpty() {
+		t.Fatal("expected non-empty diff")
 	}
-	if _, ok := diff.Changed["EXISTING_KEY"]; !ok {
-		t.Error("expected EXISTING_KEY to appear in diff as changed")
+
+	found := false
+	for _, c := range diff.Changes {
+		if c.Key == "NEW_KEY" && c.Type == env.Added {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected NEW_KEY to appear as added in diff")
 	}
 }

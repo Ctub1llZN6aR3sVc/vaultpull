@@ -8,57 +8,59 @@ import (
 	"github.com/yourusername/vaultpull/internal/vault"
 )
 
-// VaultClient defines the interface for fetching secrets from Vault.
-type VaultClient interface {
+// SecretClient is the interface for fetching secrets from Vault.
+type SecretClient interface {
 	GetSecrets(path string) (map[string]string, error)
 }
 
-// Syncer orchestrates pulling secrets from Vault and writing them to .env files.
+// Syncer orchestrates fetching secrets and writing them to an env file.
 type Syncer struct {
-	client VaultClient
-	writer *env.Writer
+	client  SecretClient
+	envFile string
 }
 
-// New creates a new Syncer using the provided VaultClient and env Writer.
-func New(client VaultClient, writer *env.Writer) *Syncer {
-	return &Syncer{
-		client: client,
-		writer: writer,
-	}
+// New creates a Syncer with the given client and env file path.
+func New(client SecretClient, envFile string) *Syncer {
+	return &Syncer{client: client, envFile: envFile}
 }
 
-// NewFromConfig constructs a Syncer from a resolved config profile.
-func NewFromConfig(profile *config.Profile) (*Syncer, error) {
-	client, err := vault.NewClient(profile.VaultAddr, profile.Token)
+// NewFromConfig constructs a Syncer from a loaded config and profile name.
+func NewFromConfig(cfg *config.Config, profile string, token string) (*Syncer, string, error) {
+	p, err := cfg.GetProfile(profile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create vault client: %w", err)
+		return nil, "", fmt.Errorf("profile %q not found: %w", profile, err)
 	}
 
-	writer, err := env.NewWriter(profile.EnvFile)
+	client, err := vault.NewClient(cfg.Vault.Address, token)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create env writer: %w", err)
+		return nil, "", fmt.Errorf("vault client error: %w", err)
 	}
 
-	return New(client, writer), nil
+	return New(client, p.EnvFile), p.EnvFile, nil
 }
 
-// Run pulls secrets from each configured Vault path and merges them into the env file.
-func (s *Syncer) Run(paths []string) error {
-	merged := make(map[string]string)
+// Run fetches secrets from all given paths, merges them, and writes to the env file.
+// It returns a DiffResult describing what changed relative to the existing env file.
+func (s *Syncer) Run(paths []string) (*env.DiffResult, error) {
+	incoming := make(map[string]string)
 
 	for _, path := range paths {
 		secrets, err := s.client.GetSecrets(path)
 		if err != nil {
-			return fmt.Errorf("failed to get secrets from path %q: %w", path, err)
+			return nil, fmt.Errorf("failed to get secrets from %q: %w", path, err)
 		}
 		for k, v := range secrets {
-			merged[k] = v
+			incoming[k] = v
 		}
 	}
 
-	if err := s.writer.Merge(merged); err != nil {
-		return fmt.Errorf("failed to write secrets to env file: %w", err)
+	existing := env.Read(s.envFile)
+	diff := env.Diff(existing, incoming)
+
+	w := env.NewWriter(s.envFile)
+	if err := w.Merge(incoming); err != nil {
+		return nil, fmt.Errorf("failed to write env file: %w", err)
 	}
 
-	return nil
+	return diff, nil
 }
