@@ -7,55 +7,43 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Profile represents a named Vault sync configuration.
+// Profile holds the settings for a single named environment.
 type Profile struct {
-	Name      string `yaml:"name"`
-	VaultAddr string `yaml:"vault_addr"`
-	VaultPath string `yaml:"vault_path"`
-	OutputFile string `yaml:"output_file"`
-	AuthMethod string `yaml:"auth_method"` // token, approle
+	Address string   `yaml:"address"`
+	EnvFile string   `yaml:"env_file"`
+	Paths   []string `yaml:"paths"`
+	Backup  bool     `yaml:"backup"`
 }
 
-// Config holds all vaultpull configuration.
+// Config is the top-level configuration structure.
 type Config struct {
 	DefaultProfile string             `yaml:"default_profile"`
 	Profiles       map[string]Profile `yaml:"profiles"`
 }
 
-// Load reads and parses the config file at the given path.
+// Load reads and parses a YAML config file from the given path.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("config file not found at %q: run 'vaultpull init' to create one", path)
-		}
-		return nil, fmt.Errorf("reading config file: %w", err)
+		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing config file: %w", err)
+		return nil, fmt.Errorf("parse config: %w", err)
 	}
-
-	if cfg.Profiles == nil {
-		cfg.Profiles = make(map[string]Profile)
-	}
-
 	return &cfg, nil
 }
 
-// GetProfile returns the profile by name, or the default profile if name is empty.
-func (c *Config) GetProfile(name string) (Profile, error) {
-	key := name
-	if key == "" {
-		key = c.DefaultProfile
+// GetProfile returns the named profile, falling back to DefaultProfile when
+// name is empty. Returns an error if the profile is not found.
+func (c *Config) GetProfile(name string) (*Profile, error) {
+	if name == "" {
+		name = c.DefaultProfile
 	}
-	if key == "" {
-		return Profile{}, fmt.Errorf("no profile specified and no default_profile set")
-	}
-	p, ok := c.Profiles[key]
+	p, ok := c.Profiles[name]
 	if !ok {
-		return Profile{}, fmt.Errorf("profile %q not found in config", key)
+		return nil, fmt.Errorf("profile %q not found", name)
 	}
-	return p, nil
+	return &p, nil
 }
