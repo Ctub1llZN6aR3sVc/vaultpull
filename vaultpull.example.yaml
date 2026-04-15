@@ -1,0 +1,32 @@
+# vaultpull configuration file
+# Copy this file to vaultpull.yaml and adjust to your environment.
+# Tip: add vaultpull.yaml to .gitignore to avoid committing secrets config.
+
+# The profile used when no --profile flag is provided.
+default_profile: dev
+
+profiles:
+  dev:
+    name: dev
+    # Address of your Vault server
+    vault_addr: http://127.0.0.1:8200
+    # KV v2 path to your secrets (without the 'data/' prefix for v1)
+    vault_path: secret/data/myapp/dev
+    # Local file to write the synced secrets into
+    output_file: .env
+    # Authentication method: 'token' or 'approle'
+    auth_method: token
+
+  staging:
+    name: staging
+    vault_addr: https://vault.staging.example.com
+    vault_path: secret/data/myapp/staging
+    output_file: .env.staging
+    auth_method: approle
+
+  production:
+    name: production
+    vault_addr: https://vault.production.example.com
+    vault_path: secret/data/myapp/production
+    output_file: .env.production
+    auth_method: approle
