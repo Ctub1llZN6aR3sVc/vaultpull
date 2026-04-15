@@ -1,46 +1,67 @@
 package env
 
-// DiffResult holds the result of comparing two env maps.
-type DiffResult struct {
-	Added   map[string]string
-	Removed map[string]string
-	Changed map[string]OldNew
+import "fmt"
+
+// ChangeType represents the kind of change detected.
+type ChangeType string
+
+const (
+	ChangeAdded   ChangeType = "added"
+	ChangeRemoved ChangeType = "removed"
+	ChangeUpdated ChangeType = "updated"
+)
+
+// Change describes a single key-level difference between two env maps.
+type Change struct {
+	Key      string
+	Type     ChangeType
+	OldValue string
+	NewValue string
 }
 
-// OldNew holds the old and new values for a changed key.
-type OldNew struct {
-	Old string
-	New string
-}
-
-// Diff compares a current env map with an incoming map and returns
-// the keys that were added, removed, or changed.
-func Diff(current, incoming map[string]string) DiffResult {
-	result := DiffResult{
-		Added:   make(map[string]string),
-		Removed: make(map[string]string),
-		Changed: make(map[string]OldNew),
+// String returns a human-readable description of the change.
+func (c Change) String() string {
+	switch c.Type {
+	case ChangeAdded:
+		return fmt.Sprintf("+ %s", c.Key)
+	case ChangeRemoved:
+		return fmt.Sprintf("- %s", c.Key)
+	case ChangeUpdated:
+		return fmt.Sprintf("~ %s", c.Key)
+	default:
+		return c.Key
 	}
+}
+
+// DiffResult holds the full set of changes between two env maps.
+type DiffResult struct {
+	Changes []Change
+}
+
+// IsEmpty returns true when no changes were detected.
+func (d DiffResult) IsEmpty() bool {
+	return len(d.Changes) == 0
+}
+
+// Diff compares an existing env map (old) against incoming secrets (new)
+// and returns a DiffResult describing what changed.
+func Diff(old, incoming map[string]string) DiffResult {
+	var changes []Change
 
 	for k, newVal := range incoming {
-		oldVal, exists := current[k]
+		oldVal, exists := old[k]
 		if !exists {
-			result.Added[k] = newVal
+			changes = append(changes, Change{Key: k, Type: ChangeAdded, NewValue: newVal})
 		} else if oldVal != newVal {
-			result.Changed[k] = OldNew{Old: oldVal, New: newVal}
+			changes = append(changes, Change{Key: k, Type: ChangeUpdated, OldValue: oldVal, NewValue: newVal})
 		}
 	}
 
-	for k, oldVal := range current {
+	for k, oldVal := range old {
 		if _, exists := incoming[k]; !exists {
-			result.Removed[k] = oldVal
+			changes = append(changes, Change{Key: k, Type: ChangeRemoved, OldValue: oldVal})
 		}
 	}
 
-	return result
-}
-
-// IsEmpty returns true when there are no differences.
-func (d DiffResult) IsEmpty() bool {
-	return len(d.Added) == 0 && len(d.Removed) == 0 && len(d.Changed) == 0
+	return DiffResult{Changes: changes}
 }

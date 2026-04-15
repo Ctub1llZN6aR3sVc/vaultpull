@@ -5,70 +5,84 @@ import (
 )
 
 func TestDiff_NoChanges(t *testing.T) {
-	current := map[string]string{"FOO": "bar", "BAZ": "qux"}
+	old := map[string]string{"FOO": "bar", "BAZ": "qux"}
 	incoming := map[string]string{"FOO": "bar", "BAZ": "qux"}
 
-	result := Diff(current, incoming)
-
+	result := Diff(old, incoming)
 	if !result.IsEmpty() {
-		t.Errorf("expected no diff, got added=%v removed=%v changed=%v",
-			result.Added, result.Removed, result.Changed)
+		t.Errorf("expected no changes, got %d", len(result.Changes))
 	}
 }
 
 func TestDiff_DetectsAdded(t *testing.T) {
-	current := map[string]string{"FOO": "bar"}
-	incoming := map[string]string{"FOO": "bar", "NEW_KEY": "newval"}
+	old := map[string]string{}
+	incoming := map[string]string{"NEW_KEY": "value"}
 
-	result := Diff(current, incoming)
-
-	if len(result.Added) != 1 {
-		t.Fatalf("expected 1 added key, got %d", len(result.Added))
+	result := Diff(old, incoming)
+	if len(result.Changes) != 1 {
+		t.Fatalf("expected 1 change, got %d", len(result.Changes))
 	}
-	if result.Added["NEW_KEY"] != "newval" {
-		t.Errorf("expected NEW_KEY=newval, got %q", result.Added["NEW_KEY"])
+	if result.Changes[0].Type != ChangeAdded {
+		t.Errorf("expected ChangeAdded, got %s", result.Changes[0].Type)
+	}
+	if result.Changes[0].Key != "NEW_KEY" {
+		t.Errorf("expected key NEW_KEY, got %s", result.Changes[0].Key)
 	}
 }
 
 func TestDiff_DetectsRemoved(t *testing.T) {
-	current := map[string]string{"FOO": "bar", "OLD_KEY": "oldval"}
-	incoming := map[string]string{"FOO": "bar"}
+	old := map[string]string{"GONE": "bye"}
+	incoming := map[string]string{}
 
-	result := Diff(current, incoming)
-
-	if len(result.Removed) != 1 {
-		t.Fatalf("expected 1 removed key, got %d", len(result.Removed))
+	result := Diff(old, incoming)
+	if len(result.Changes) != 1 {
+		t.Fatalf("expected 1 change, got %d", len(result.Changes))
 	}
-	if result.Removed["OLD_KEY"] != "oldval" {
-		t.Errorf("expected OLD_KEY=oldval in removed, got %q", result.Removed["OLD_KEY"])
+	if result.Changes[0].Type != ChangeRemoved {
+		t.Errorf("expected ChangeRemoved, got %s", result.Changes[0].Type)
 	}
 }
 
 func TestDiff_DetectsChanged(t *testing.T) {
-	current := map[string]string{"FOO": "bar"}
-	incoming := map[string]string{"FOO": "baz"}
+	old := map[string]string{"KEY": "old"}
+	incoming := map[string]string{"KEY": "new"}
 
-	result := Diff(current, incoming)
-
-	if len(result.Changed) != 1 {
-		t.Fatalf("expected 1 changed key, got %d", len(result.Changed))
+	result := Diff(old, incoming)
+	if len(result.Changes) != 1 {
+		t.Fatalf("expected 1 change, got %d", len(result.Changes))
 	}
-	on, ok := result.Changed["FOO"]
-	if !ok {
-		t.Fatal("expected FOO in changed")
+	c := result.Changes[0]
+	if c.Type != ChangeUpdated {
+		t.Errorf("expected ChangeUpdated, got %s", c.Type)
 	}
-	if on.Old != "bar" || on.New != "baz" {
-		t.Errorf("expected FOO old=bar new=baz, got old=%q new=%q", on.Old, on.New)
+	if c.OldValue != "old" || c.NewValue != "new" {
+		t.Errorf("unexpected values: old=%s new=%s", c.OldValue, c.NewValue)
 	}
 }
 
 func TestDiff_IsEmpty_False(t *testing.T) {
-	current := map[string]string{}
-	incoming := map[string]string{"FOO": "bar"}
+	old := map[string]string{"A": "1"}
+	incoming := map[string]string{"A": "2"}
 
-	result := Diff(current, incoming)
-
+	result := Diff(old, incoming)
 	if result.IsEmpty() {
-		t.Error("expected IsEmpty to return false")
+		t.Error("expected IsEmpty to be false")
+	}
+}
+
+func TestChange_String(t *testing.T) {
+	cases := []struct {
+		change Change
+		want   string
+	}{
+		{Change{Key: "FOO", Type: ChangeAdded}, "+ FOO"},
+		{Change{Key: "BAR", Type: ChangeRemoved}, "- BAR"},
+		{Change{Key: "BAZ", Type: ChangeUpdated}, "~ BAZ"},
+	}
+	for _, tc := range cases {
+		got := tc.change.String()
+		if got != tc.want {
+			t.Errorf("String() = %q, want %q", got, tc.want)
+		}
 	}
 }
