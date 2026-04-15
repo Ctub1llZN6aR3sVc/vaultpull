@@ -2,15 +2,16 @@ package env
 
 import "fmt"
 
-// ChangeType represents the type of change detected.
+// ChangeType represents the kind of change detected.
 type ChangeType string
-(
+
+const (
 	Added   ChangeType = "added"
 	Removed ChangeType = "removed"
 	Changed ChangeType = "changed"
 )
 
-// Change represents a single key-level difference.
+// Change represents a single key-level difference between two env maps.
 type Change struct {
 	Key      string
 	Type     ChangeType
@@ -18,51 +19,51 @@ type Change struct {
 	NewValue string
 }
 
-// DiffResult holds the full set of changes between two env maps.
+// DiffResult holds all changes between two env maps.
 type DiffResult struct {
 	Changes []Change
 }
 
-// IsEmpty returns true if there are no changes.
+// IsEmpty returns true when no changes were detected.
 func (d *DiffResult) IsEmpty() bool {
 	return len(d.Changes) == 0
 }
 
-// Summary returns a human-readable summary of changes.
+// Summary returns a human-readable summary of the diff.
 func (d *DiffResult) Summary() string {
 	if d.IsEmpty() {
 		return "no changes"
 	}
-	var out string
+	added, removed, changed := 0, 0, 0
 	for _, c := range d.Changes {
 		switch c.Type {
 		case Added:
-			out += fmt.Sprintf("+ %s=%q\n", c.Key, c.NewValue)
+			added++
 		case Removed:
-			out += fmt.Sprintf("- %s=%q\n", c.Key, c.OldValue)
+			removed++
 		case Changed:
-			out += fmt.Sprintf("~ %s: %q -> %q\n", c.Key, c.OldValue, c.NewValue)
+			changed++
 		}
 	}
-	return out
+	return fmt.Sprintf("+%d added, -%d removed, ~%d changed", added, removed, changed)
 }
 
-// Diff computes the difference between an existing env map and a new one.
-// existing is the current state; incoming is the desired state.
-func Diff(existing, incoming map[string]string) *DiffResult {
+// Diff compares an existing env map (before) with a new one (after)
+// and returns the set of changes.
+func Diff(before, after map[string]string) *DiffResult {
 	result := &DiffResult{}
 
-	for k, newVal := range incoming {
-		oldVal, exists := existing[k]
+	for key, newVal := range after {
+		oldVal, exists := before[key]
 		if !exists {
 			result.Changes = append(result.Changes, Change{
-				Key:      k,
+				Key:      key,
 				Type:     Added,
 				NewValue: newVal,
 			})
 		} else if oldVal != newVal {
 			result.Changes = append(result.Changes, Change{
-				Key:      k,
+				Key:      key,
 				Type:     Changed,
 				OldValue: oldVal,
 				NewValue: newVal,
@@ -70,10 +71,10 @@ func Diff(existing, incoming map[string]string) *DiffResult {
 		}
 	}
 
-	for k, oldVal := range existing {
-		if _, exists := incoming[k]; !exists {
+	for key, oldVal := range before {
+		if _, exists := after[key]; !exists {
 			result.Changes = append(result.Changes, Change{
-				Key:      k,
+				Key:      key,
 				Type:     Removed,
 				OldValue: oldVal,
 			})

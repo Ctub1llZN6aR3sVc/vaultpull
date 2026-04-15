@@ -1,11 +1,12 @@
 package sync
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/yourusername/vaultpull/internal/env"
+	"github.com/yourusername/vaultpull/internal/config"
 	"github.com/yourusername/vaultpull/internal/vault"
 )
 
@@ -13,40 +14,47 @@ func TestRun_DiffReportsNewKeys(t *testing.T) {
 	dir := t.TempDir()
 	envFile := filepath.Join(dir, ".env")
 
-	// Pre-populate env file with an existing key
-	err := os.WriteFile(envFile, []byte("EXISTING=value\n"), 0600)
-	if err != nil {
-		t.Fatalf("failed to write initial env file: %v", err)
+	// Pre-populate with an existing key.
+	if err := os.WriteFile(envFile, []byte("EXISTING=old\n"), 0600); err != nil {
+		t.Fatal(err)
 	}
 
-	mockClient := vault.NewMockClient(map[string]map[string]string{
+	client := vault.NewMockClient(map[string]map[string]string{
 		"secret/app": {
-			"EXISTING": "value",
-			"NEW_KEY":  "new_value",
+			"EXISTING": "new",
+			"BRAND_NEW": "value",
 		},
 	})
 
-	syncer := New(mockClient, envFile)
-	diff, err := syncer.Run([]string{"secret/app"})
-	if err != nil {
-		t.Fatalf("Run failed: %v", err)
+	profile := config.Profile{
+		EnvFile: envFile,
+		Paths:   []string{"secret/app"},
 	}
 
-	if diff == nil {
-		t.Fatal("expected a diff result, got nil")
+	var buf bytes.Buffer
+	s := New(client, profile, &buf)
+	diff, err := s.Run()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if diff.IsEmpty() {
 		t.Fatal("expected non-empty diff")
 	}
 
-	found := false
+	foundAdded, foundChanged := false, false
 	for _, c := range diff.Changes {
-		if c.Key == "NEW_KEY" && c.Type == env.Added {
-			found = true
+		if c.Key == "BRAND_NEW" && c.Type == "added" {
+			foundAdded = true
+		}
+		if c.Key == "EXISTING" && c.Type == "changed" {
+			foundChanged = true
 		}
 	}
-	if !found {
-		t.Error("expected NEW_KEY to appear as added in diff")
+	if !foundAdded {
+		t.Error("expected BRAND_NEW to be reported as added")
+	}
+	if !foundChanged {
+		t.Error("expected EXISTING to be reported as changed")
 	}
 }
