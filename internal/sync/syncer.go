@@ -3,108 +3,123 @@ package sync
 import (
 	"fmt"
 
-	"github.com/eliziario/vaultpull/internal/config"
-	"github.com/eliziario/vaultpull/internal/env"
-	"github.com/eliziario/vaultpull/internal/vault"
+	"github.com/elizaos/vaultpull/internal/config"
+	"github.com/elizaos/vaultpull/internal/env"
+	"github.com/elizaos/vaultpull/internal/vault"
 )
 
-// VaultClient defines the interface for fetching secrets.
+// VaultClient abstracts secret retrieval.
 type VaultClient interface {
 	GetSecrets(path string) (map[string]string, error)
 }
 
-// Options configures optional syncer behaviour.
+// Options configures a Syncer run.
 type Options struct {
-	DryRun          bool
-	BackupEnabled   bool
-	BackupDir       string
-	BackupKeep      int
-	AuditLogPath    string
-	Validate        bool
-	TTL             string
-	RenderTemplates bool
+	Paths          []string
+	OutputFile     string
+	Merge          bool
+	BackupEnabled  bool
+	BackupDir      string
+	BackupKeep     int
+	AuditLog       string
+	Validate       bool
+	ExpiryTTLDays  int
+	RenderTemplate bool
+	Filter         env.FilterOptions
+	Transform      env.TransformOptions
+	EncryptKey     []byte
 }
 
 // Syncer pulls secrets from Vault and writes them to an env file.
 type Syncer struct {
 	client  VaultClient
-	envFile string
-	paths   []string
-	opts    Options
+	options Options
 }
 
-// New creates a Syncer with explicit dependencies.
-func New(client VaultClient, envFile string, paths []string, opts Options) *Syncer {
-	return &Syncer{client: client, envFile: envFile, paths: paths, opts: opts}
+// New creates a Syncer with the given client and options.
+func New(client VaultClient, opts Options) *Syncer {
+	return &Syncer{client: client, options: opts}
 }
 
-// NewFromConfig constructs a Syncer from a loaded config profile.
-func NewFromConfig(client VaultClient, profile *config.Profile) *Syncer {
-	return &Syncer{
-		client:  client,
-		envFile: profile.EnvFile,
-		paths:   profile.Paths,
-		opts: Options{
-			BackupEnabled:   profile.Backup.Enabled,
-			BackupDir:       profile.Backup.Dir,
-			BackupKeep:      profile.Backup.Keep,
-			AuditLogPath:    profile.AuditLog,
-			Validate:        profile.Validate,
-			TTL:             profile.TTL,
-			RenderTemplates: profile.RenderTemplates,
-		},
+// NewFromConfig builds a Syncer from a loaded config profile.
+func NewFromConfig(cfg *config.Config, profile string) (*Syncer, error) {
+	p, err := cfg.GetProfile(profile)
+	if err != nil {
+		return nil, err
 	}
+	client, err := vault.NewClient(p.Address, p.Token)
+	if err != nil {
+		return nil, err
+	}
+	opts := Options{
+		Paths:      p.Paths,
+		OutputFile: p.OutputFile,
+		Merge:      p.Merge,
+	}
+	return New(client, opts), nil
 }
 
-// Run fetches secrets from all configured paths and writes them to the env file.
+// Run executes the sync: fetch, transform, filter, encrypt, write.
 func (s *Syncer) Run() error {
 	merged := make(map[string]string)
-
-	for _, path := range s.paths {
+	for _, path := range s.options.Paths {
 		secrets, err := s.client.GetSecrets(path)
 		if err != nil {
-			return fmt.Errorf("vault path %q: %w", path, err)
+			return fmt.Errorf("path %s: %w", path, err)
 		}
 		for k, v := range secrets {
 			merged[k] = v
 		}
 	}
 
-	if s.opts.RenderTemplates {
-		rendered, err := env.RenderMap(merged)
+	if s.options.RenderTemplate {
+		var err error
+		merged, err = env.RenderMap(merged)
 		if err != nil {
-			return fmt.Errorf("template rendering: %w", err)
+			return err
 		}
-		merged = rendered
 	}
 
-	if s.opts.Validate {
+	merged = env.Filter(merged, s.options.Filter)
+	merged = env.Transform(merged, s.options.Transform)
+
+	if s.options.Validate {
 		result := env.Validate(merged)
 		if !result.Valid {
 			return fmt.Errorf("validation failed: %s", result.Summary)
 		}
 	}
 
-	if s.opts.BackupEnabled {
-		if err := env.Rotate(s.envFile, env.RotateOptions{
-			BackupDir:  s.opts.BackupDir,
-			KeepBackups: s.opts.BackupKeep,
+	if len(s.options.EncryptKey) > 0 {
+		var err error
+		merged, err = env.EncryptSecrets(merged, s.options.EncryptKey)
+		if err != nil {
+			return fmt.Errorf("encrypt secrets: %w", err)
+		}
+	}
+
+	if s.options.BackupEnabled {
+		if err := env.Rotate(s.options.OutputFile, env.RotateOptions{
+			BackupDir:  s.options.BackupDir,
+			KeepBackups: s.options.BackupKeep,
 		}); err != nil {
-			return fmt.Errorf("backup: %w", err)
+			return err
 		}
 	}
 
-	w := env.NewWriter(s.envFile)
-	if err := w.Merge(merged); err != nil {
-		return fmt.Errorf("write env file: %w", err)
+	w := env.NewWriter(s.options.OutputFile)
+	var writeErr error
+	if s.options.Merge {
+		writeErr = w.Merge(merged)
+	} else {
+		writeErr = w.Write(merged)
+	}
+	if writeErr != nil {
+		return writeErr
 	}
 
-	if s.opts.AuditLogPath != "" {
-		keys := make([]string, 0, len(merged))
-		for k := range merged {
-			keys = append(keys, k)
-		}
-		_ = env.WriteAuditLog(s.opts.AuditLogPath, vault.TokenSource(), s.paths, keys)
+	if s.options.AuditLog != "" {
+		_ = env.WriteAuditLog(s.options.AuditLog, merged)
 	}
 
 	return nil
