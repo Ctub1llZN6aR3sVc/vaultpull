@@ -58,3 +58,35 @@ func TestRun_DiffReportsNewKeys(t *testing.T) {
 		t.Error("expected EXISTING to be reported as changed")
 	}
 }
+
+func TestRun_DiffEmptyWhenNoChanges(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, ".env")
+
+	// Pre-populate with the same value that Vault will return.
+	if err := os.WriteFile(envFile, []byte("EXISTING=same\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	client := vault.NewMockClient(map[string]map[string]string{
+		"secret/app": {
+			"EXISTING": "same",
+		},
+	})
+
+	profile := config.Profile{
+		EnvFile: envFile,
+		Paths:   []string{"secret/app"},
+	}
+
+	var buf bytes.Buffer
+	s := New(client, profile, &buf)
+	diff, err := s.Run()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !diff.IsEmpty() {
+		t.Errorf("expected empty diff, got %d change(s)", len(diff.Changes))
+	}
+}
