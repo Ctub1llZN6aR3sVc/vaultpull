@@ -71,3 +71,34 @@ profiles:
 		t.Fatal("expected error for missing profile, got nil")
 	}
 }
+
+func TestGetProfile_ExplicitName(t *testing.T) {
+	content := `
+default_profile: dev
+profiles:
+  dev:
+    name: dev
+    vault_addr: http://127.0.0.1:8200
+    vault_path: secret/data/myapp/dev
+    output_file: .env
+    auth_method: token
+  staging:
+    name: staging
+    vault_addr: http://staging.example.com:8200
+    vault_path: secret/data/myapp/staging
+    output_file: .env.staging
+    auth_method: token
+`
+	path := writeTempConfig(t, content)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	p, err := cfg.GetProfile("staging")
+	if err != nil {
+		t.Fatalf("GetProfile(staging): %v", err)
+	}
+	if p.VaultAddr != "http://staging.example.com:8200" {
+		t.Errorf("unexpected vault_addr: %q", p.VaultAddr)
+	}
+}
