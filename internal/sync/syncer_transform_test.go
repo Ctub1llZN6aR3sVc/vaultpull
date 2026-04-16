@@ -71,3 +71,24 @@ func TestRun_NoTransformByDefault(t *testing.T) {
 		t.Fatalf("expected my_key unchanged, got: %s", data)
 	}
 }
+
+func TestRun_TransformPrefixAndUppercase(t *testing.T) {
+	client := vault.NewMockClient(map[string]map[string]string{
+		"secret/app": {"db_pass": "secret"},
+	})
+
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, ".env")
+
+	s := New(client, []string{"secret/app"}, outFile)
+	s.Transform = env.TransformOptions{Prefix: "APP_", Uppercase: true}
+
+	if err := s.Run(); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	data, _ := os.ReadFile(outFile)
+	if !strings.Contains(string(data), "APP_DB_PASS") {
+		t.Fatalf("expected APP_DB_PASS in output, got: %s", data)
+	}
+}
