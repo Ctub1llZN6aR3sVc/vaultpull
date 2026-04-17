@@ -61,3 +61,18 @@ func ReadAuditLog(logPath string) ([]AuditEntry, error) {
 	}
 	return entries, nil
 }
+
+// FilterAuditLog returns all audit entries that match the given profile.
+// If profile is empty, all entries are returned.
+func FilterAuditLog(entries []AuditEntry, profile string) []AuditEntry {
+	if profile == "" {
+		return entries
+	}
+	var filtered []AuditEntry
+	for _, e := range entries {
+		if e.Profile == profile {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
+}
