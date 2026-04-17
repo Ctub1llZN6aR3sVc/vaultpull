@@ -3,76 +3,94 @@ package sync
 import (
 	"fmt"
 
-	"github.com/elizaos/vaultpull/internal/config"
-	"github.com/elizaos/vaultpull/internal/env"
-	"github.com/elizaos/vaultpull/internal/vault"
+	"github.com/yourusername/vaultpull/internal/config"
+	"github.com/yourusername/vaultpull/internal/env"
+	"github.com/yourusername/vaultpull/internal/vault"
 )
 
-// VaultClient abstracts secret retrieval.
+// VaultClient fetches secrets from a Vault path.
 type VaultClient interface {
 	GetSecrets(path string) (map[string]string, error)
-}
-
-// Options configures a Syncer run.
-type Options struct {
-	Paths          []string
-	OutputFile     string
-	Merge          bool
-	BackupEnabled  bool
-	BackupDir      string
-	BackupKeep     int
-	AuditLog       string
-	Validate       bool
-	ExpiryTTLDays  int
-	RenderTemplate bool
-	Filter         env.FilterOptions
-	Transform      env.TransformOptions
-	EncryptKey     []byte
 }
 
 // Syncer pulls secrets from Vault and writes them to an env file.
 type Syncer struct {
 	client  VaultClient
-	options Options
+	paths   []string
+	output  string
+
+	Backup    *env.BackupOptions
+	Audit     string
+	Encrypt   []byte
+	Snapshot  string
+	Lint      bool
+	Validate  bool
+	Template  bool
+	Filter    *env.FilterOptions
+	Transform *env.TransformOptions
+	Resolve   *env.ResolveOptions
+	PinFile   string
+	Expiry    map[string]string
 }
 
-// New creates a Syncer with the given client and options.
-func New(client VaultClient, opts Options) *Syncer {
-	return &Syncer{client: client, options: opts}
+// New creates a Syncer with the given client, paths, and output file.
+func New(client VaultClient, paths []string, output string) *Syncer {
+	return &Syncer{client: client, paths: paths, output: output}
 }
 
-// NewFromConfig builds a Syncer from a loaded config profile.
-func NewFromConfig(cfg *config.Config, profile string) (*Syncer, error) {
-	p, err := cfg.GetProfile(profile)
-	if err != nil {
-		return nil, err
+// NewFromConfig builds a Syncer from a config profile.
+func NewFromConfig(client VaultClient, profile config.Profile) *Syncer {
+	s := New(client, profile.Paths, profile.Output)
+	if profile.Backup.Enabled {
+		s.Backup = &env.BackupOptions{
+			Dir:     profile.Backup.Dir,
+			MaxKeep: profile.Backup.MaxKeep,
+		}
 	}
-	client, err := vault.NewClient(p.Address, p.Token)
-	if err != nil {
-		return nil, err
-	}
-	opts := Options{
-		Paths:      p.Paths,
-		OutputFile: p.OutputFile,
-		Merge:      p.Merge,
-	}
-	return New(client, opts), nil
+	s.Audit = profile.AuditLog
+	s.Snapshot = profile.Snapshot
+	s.Lint = profile.Lint
+	s.Validate = profile.Validate
+	s.Template = profile.Template
+	return s
 }
 
-// Run executes the sync: fetch, transform, filter, encrypt, write.
+// Run executes the sync: fetch, resolve, transform, filter, write.
 func (s *Syncer) Run() error {
 	merged := make(map[string]string)
-	for _, path := range s.options.Paths {
+
+	for _, path := range s.paths {
 		secrets, err := s.client.GetSecrets(path)
 		if err != nil {
-			return fmt.Errorf("path %s: %w", path, err)
+			return fmt.Errorf("fetch %q: %w", path, err)
 		}
 		for k, v := range secrets {
 			merged[k] = v
 		}
 	}
 
-	if s.options.RenderTemplate {
+	// Apply pins.
+	if s.PinFile != "" {
+		pins, err := env.LoadPins(s.PinFile)
+		if err != nil {
+			return err
+		}
+		if pins != nil {
+			merged = env.ApplyPins(merged, pins)
+		}
+	}
+
+	// Resolve defaults / required.
+	if s.Resolve != nil {
+		result, err := env.Resolve(merged, *s.Resolve)
+		if err != nil {
+			return err
+		}
+		merged = result.Secrets
+	}
+
+	// Template rendering.
+	if s.Template {
 		var err error
 		merged, err = env.RenderMap(merged)
 		if err != nil {
@@ -80,47 +98,78 @@ func (s *Syncer) Run() error {
 		}
 	}
 
-	merged = env.Filter(merged, s.options.Filter)
-	merged = env.Transform(merged, s.options.Transform)
-
-	if s.options.Validate {
-		result := env.Validate(merged)
-		if !result.Valid {
-			return fmt.Errorf("validation failed: %s", result.Summary)
-		}
+	// Filter.
+	if s.Filter != nil {
+		merged = env.Filter(merged, *s.Filter)
 	}
 
-	if len(s.options.EncryptKey) > 0 {
-		var err error
-		merged, err = env.EncryptSecrets(merged, s.options.EncryptKey)
-		if err != nil {
-			return fmt.Errorf("encrypt secrets: %w", err)
-		}
+	// Transform.
+	if s.Transform != nil {
+		merged = env.Transform(merged, *s.Transform)
 	}
 
-	if s.options.BackupEnabled {
-		if err := env.Rotate(s.options.OutputFile, env.RotateOptions{
-			BackupDir:  s.options.BackupDir,
-			KeepBackups: s.options.BackupKeep,
-		}); err != nil {
+	// Validate.
+	if s.Validate {
+		if _, err := env.Validate(merged); err != nil {
 			return err
 		}
 	}
 
-	w := env.NewWriter(s.options.OutputFile)
-	var writeErr error
-	if s.options.Merge {
-		writeErr = w.Merge(merged)
-	} else {
-		writeErr = w.Write(merged)
-	}
-	if writeErr != nil {
-		return writeErr
+	// Lint.
+	if s.Lint {
+		if _, err := env.Lint(merged); err != nil {
+			return err
+		}
 	}
 
-	if s.options.AuditLog != "" {
-		_ = env.WriteAuditLog(s.options.AuditLog, merged)
+	// Backup existing file.
+	if s.Backup != nil {
+		if err := env.Backup(s.output, *s.Backup); err != nil {
+			return err
+		}
+	}
+
+	// Encrypt.
+	if s.Encrypt != nil {
+		var err error
+		merged, err = env.EncryptSecrets(merged, s.Encrypt)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Read existing, compute diff, write.
+	existing, _ := env.Read(s.output)
+	diff := env.Diff(existing, merged)
+	_ = diff
+
+	w := env.NewWriter(s.output)
+	if err := w.Write(merged); err != nil {
+		return err
+	}
+
+	// Snapshot.
+	if s.Snapshot != "" {
+		if err := env.SaveSnapshot(s.Snapshot, merged); err != nil {
+			return err
+		}
+	}
+
+	// Audit.
+	if s.Audit != "" {
+		entry := env.AuditEntry{Keys: keysOf(merged)}
+		if err := env.WriteAuditLog(s.Audit, entry); err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+func keysOf(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
