@@ -16,17 +16,24 @@ profiles:
     output_file: .env
     # Authentication method: 'token' or 'approle'
     auth_method: token
+    # For token auth, the VAULT_TOKEN env var is used by default.
+    # You may also set vault_token here, but avoid committing real tokens.
+    # vault_token: s.xxxxxxxxxxxxxxxx
 
   staging:
     name: staging
     vault_addr: https://vault.staging.example.com
     vault_path: secret/data/myapp/staging
     output_file: .env.staging
+    # For approle auth, provide the role_id and set VAULT_SECRET_ID in your environment.
     auth_method: approle
+    # role_id: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
   production:
     name: production
     vault_addr: https://vault.production.example.com
     vault_path: secret/data/myapp/production
     output_file: .env.production
+    # For approle auth, provide the role_id and set VAULT_SECRET_ID in your environment.
     auth_method: approle
+    # role_id: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
