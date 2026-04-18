@@ -64,6 +64,18 @@ func TestPromote_DoesNotMutateInputDst(t *testing.T) {
 	}
 }
 
+func TestPromote_EmptySrcReturnsUnchanged(t *testing.T) {
+	dst := map[string]string{"A": "1"}
+	src := map[string]string{}
+	out, res := Promote(dst, src, PromoteOptions{})
+	if len(out) != 1 || out["A"] != "1" {
+		t.Fatalf("expected unchanged output, got %v", out)
+	}
+	if len(res.Added) != 0 || len(res.Skipped) != 0 || len(res.Overwrote) != 0 {
+		t.Fatalf("expected empty result, got %v", res)
+	}
+}
+
 func TestPromoteResult_String(t *testing.T) {
 	r := PromoteResult{Added: []string{"X"}, Skipped: []string{"Y", "Z"}, Overwrote: nil}
 	s := r.String()
