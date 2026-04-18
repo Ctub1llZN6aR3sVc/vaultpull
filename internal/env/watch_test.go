@@ -42,6 +42,28 @@ func TestHashFile_DeterministicHash(t *testing.T) {
 	}
 }
 
+func TestHashFile_DiffersOnContentChange(t *testing.T) {
+	dir := t.TempDir()
+	p := writeWatchFile(t, dir, ".env", "KEY=a\n")
+
+	h1, err := HashFile(p)
+	if err != nil {
+		t.Fatalf("hash1: %v", err)
+	}
+
+	if err := os.WriteFile(p, []byte("KEY=b\n"), 0600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	h2, err := HashFile(p)
+	if err != nil {
+		t.Fatalf("hash2: %v", err)
+	}
+	if h1 == h2 {
+		t.Errorf("expected different hashes for different content, got %q", h1)
+	}
+}
+
 func TestWatchState_ChangedAfterWrite(t *testing.T) {
 	dir := t.TempDir()
 	p := writeWatchFile(t, dir, ".env", "KEY=old\n")
