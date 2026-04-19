@@ -60,3 +60,15 @@ func ValidateSchema(secrets map[string]string, fields []SchemaField, strict bool
 
 	return result
 }
+
+// EmptyValueKeys returns the keys from secrets that are present but have an empty value.
+// This is useful for detecting keys that exist in Vault but were not populated.
+func EmptyValueKeys(secrets map[string]string) []string {
+	var empty []string
+	for k, v := range secrets {
+		if strings.TrimSpace(v) == "" {
+			empty = append(empty, k)
+		}
+	}
+	return empty
+}
