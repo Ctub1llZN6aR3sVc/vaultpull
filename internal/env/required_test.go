@@ -86,3 +86,13 @@ func TestRequired_SummaryWithViolations(t *testing.T) {
 		t.Fatalf("unexpected summary: %s", s)
 	}
 }
+
+func TestRequired_NilSecrets(t *testing.T) {
+	res, err := Required(nil, RequiredOptions{Keys: []string{"DB_HOST"}})
+	if err == nil {
+		t.Fatal("expected error for nil secrets map")
+	}
+	if len(res.Missing) != 1 || res.Missing[0] != "DB_HOST" {
+		t.Fatalf("expected DB_HOST in Missing, got %v", res.Missing)
+	}
+}
