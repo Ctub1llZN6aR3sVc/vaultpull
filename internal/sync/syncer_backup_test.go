@@ -68,3 +68,27 @@ func TestRun_BackupAbsentFileIsNoop(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, matches, "no backup expected when original file was absent")
 }
+
+func TestRun_BackupPreservesFilePermissions(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+
+	// Write the original file with restricted permissions.
+	require.NoError(t, os.WriteFile(envPath, []byte("SECRET=hunter2\n"), 0600))
+
+	client := vault.NewMockClient(map[string]map[string]string{
+		"secret/app": {"SECRET": "hunter2"},
+	})
+
+	syncer := New(client, envPath, []string{"secret/app"}, true)
+	_, err := syncer.Run()
+	require.NoError(t, err)
+
+	matches, err := filepath.Glob(filepath.Join(dir, ".env.*.bak"))
+	require.NoError(t, err)
+	require.Len(t, matches, 1, "expected exactly one backup file")
+
+	info, err := os.Stat(matches[0])
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm(), "backup file should preserve original permissions")
+}
