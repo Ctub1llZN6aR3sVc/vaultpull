@@ -59,3 +59,35 @@ func TestRun_AliasNilSkipsAliasing(t *testing.T) {
 		t.Fatalf("expected FOO=bar, got %q", env["FOO"])
 	}
 }
+
+// TestRun_AliasUnknownSourceKeyIgnored verifies that an alias referencing a
+// source key that does not exist in the fetched secrets is silently skipped,
+// leaving the output file without the alias key.
+func TestRun_AliasUnknownSourceKeyIgnored(t *testing.T) {
+	client := vault.NewMockClient(map[string]map[string]string{
+		"secret/app": {"FOO": "bar"},
+	})
+
+	tmp := tempEnvFile(t)
+	defer os.Remove(tmp)
+
+	s := New(client, Options{
+		Paths:   []string{"secret/app"},
+		OutFile: tmp,
+		Alias: map[string]string{
+			"ALIAS_KEY": "NONEXISTENT",
+		},
+	})
+
+	if err := s.Run(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	env := readEnvFile(t, tmp)
+	if _, ok := env["ALIAS_KEY"]; ok {
+		t.Fatal("expected alias key to be absent when source key does not exist")
+	}
+	if env["FOO"] != "bar" {
+		t.Fatalf("expected FOO=bar, got %q", env["FOO"])
+	}
+}
