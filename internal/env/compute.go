@@ -2,122 +2,117 @@ package env
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
-// ComputeOptions controls how computed keys are derived from existing secrets.
+// ComputeOptions controls how computed keys are derived.
 type ComputeOptions struct {
-	// Rules maps a new key name to a Go text/template-style expression.
-	// Expressions may reference existing keys using {{.KEY_NAME}} syntax.
-	Rules map[string]string
-
-	// Overwrite allows computed values to replace existing keys.
-	// When false, existing keys are preserved.
+	// Expressions maps new key names to expression strings.
+	// Supported ops: "KEY1 + KEY2" (concat), "KEY1 - KEY2" (numeric sub),
+	// "KEY1 * KEY2" (numeric mul), "len(KEY)" (string length as string).
+	Expressions map[string]string
+	// Overwrite allows replacing an existing key.
 	Overwrite bool
-
-	// DryRun returns the result without modifying the input map.
+	// DryRun returns the result without mutating dst.
 	DryRun bool
-
-	// FailOnError causes Compute to return an error if any expression
-	// references a missing key or produces an empty value.
-	FailOnError bool
 }
 
-// ComputeResult holds the outcome of a Compute operation.
+// ComputeResult holds the outcome of a Compute call.
 type ComputeResult struct {
-	// Added lists keys that were newly created.
-	Added []string
-
-	// Skipped lists keys that were not written because Overwrite was false.
+	Added   []string
 	Skipped []string
-
-	// Errors lists keys whose expressions could not be evaluated.
-	Errors []string
+	Errors  []string
 }
 
-// Summary returns a human-readable description of the compute result.
 func (r ComputeResult) Summary() string {
-	parts := []string{}
-	if len(r.Added) > 0 {
-		parts = append(parts, fmt.Sprintf("%d added", len(r.Added)))
-	}
-	if len(r.Skipped) > 0 {
-		parts = append(parts, fmt.Sprintf("%d skipped", len(r.Skipped)))
-	}
 	if len(r.Errors) > 0 {
-		parts = append(parts, fmt.Sprintf("%d errors", len(r.Errors)))
+		return fmt.Sprintf("compute: %d added, %d skipped, %d errors", len(r.Added), len(r.Skipped), len(r.Errors))
 	}
-	if len(parts) == 0 {
-		return "compute: no changes"
-	}
-	return "compute: " + strings.Join(parts, ", ")
+	return fmt.Sprintf("compute: %d added, %d skipped", len(r.Added), len(r.Skipped))
 }
 
-// Compute evaluates each rule in opts.Rules against the provided secrets map
-// and injects the resulting key/value pairs. Expressions are resolved using
-// the same {{.KEY}} / $KEY interpolation supported by env.RenderTemplate.
-//
-// Example:
-//
-//	secrets := map[string]string{"HOST": "db.example.com", "PORT": "5432"}
-//	opts := &ComputeOptions{
-//		Rules: map[string]string{
-//			"DATABASE_URL": "postgres://{{.HOST}}:{{.PORT}}/mydb",
-//		},
-//	}
-//	result, _ := Compute(secrets, opts)
-//	// secrets["DATABASE_URL"] == "postgres://db.example.com:5432/mydb"
-func Compute(secrets map[string]string, opts *ComputeOptions) (ComputeResult, error) {
-	var result ComputeResult
-
-	if opts == nil || len(opts.Rules) == 0 {
-		return result, nil
-	}
-
-	// Work on a copy so we don't mutate the caller's map during evaluation.
-	working := make(map[string]string, len(secrets))
+// Compute derives new keys from expressions over existing secrets.
+func Compute(secrets map[string]string, opts *ComputeOptions) (map[string]string, ComputeResult, error) {
+	result := ComputeResult{}
+	out := make(map[string]string, len(secrets))
 	for k, v := range secrets {
-		working[k] = v
+		out[k] = v
+	}
+	if opts == nil || len(opts.Expressions) == 0 {
+		return out, result, nil
 	}
 
-	// Sort rule keys for deterministic evaluation order.
-	keys := make([]string, 0, len(opts.Rules))
-	for k := range opts.Rules {
-		keys = append(keys, k)
-	}
-	sortStrings(keys)
-
-	for _, key := range keys {
-		expr := opts.Rules[key]
-
-		value, err := RenderTemplate(expr, working)
+	for newKey, expr := range opts.Expressions {
+		if _, exists := out[newKey]; exists && !opts.Overwrite {
+			result.Skipped = append(result.Skipped, newKey)
+			continue
+		}
+		val, err := evalExpr(expr, out)
 		if err != nil {
-			result.Errors = append(result.Errors, key)
-			if opts.FailOnError {
-				return result, fmt.Errorf("compute: rule %q failed: %w", key, err)
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", newKey, err))
+			continue
+		}
+		if !opts.DryRun {
+			out[newKey] = val
+		}
+		result.Added = append(result.Added, newKey)
+	}
+
+	if len(result.Errors) > 0 {
+		return out, result, fmt.Errorf("compute: %s", strings.Join(result.Errors, "; "))
+	}
+	return out, result, nil
+}
+
+func evalExpr(expr string, secrets map[string]string) (string, error) {
+	expr = strings.TrimSpace(expr)
+
+	// len(KEY)
+	if strings.HasPrefix(expr, "len(") && strings.HasSuffix(expr, ")") {
+		key := expr[4 : len(expr)-1]
+		v, ok := secrets[key]
+		if !ok {
+			return "", fmt.Errorf("key %q not found", key)
+		}
+		return strconv.Itoa(len(v)), nil
+	}
+
+	for _, op := range []string{" + ", " - ", " * "} {
+		idx := strings.Index(expr, op)
+		if idx < 0 {
+			continue
+		}
+		leftKey := strings.TrimSpace(expr[:idx])
+		rightKey := strings.TrimSpace(expr[idx+len(op):])
+		leftVal, ok := secrets[leftKey]
+		if !ok {
+			return "", fmt.Errorf("key %q not found", leftKey)
+		}
+		rightVal, ok := secrets[rightKey]
+		if !ok {
+			return "", fmt.Errorf("key %q not found", rightKey)
+		}
+		switch op {
+		case " + ":
+			return leftVal + rightVal, nil
+		case " - ", " * ":
+			l, err := strconv.ParseFloat(leftVal, 64)
+			if err != nil {
+				return "", fmt.Errorf("key %q is not numeric: %v", leftKey, err)
 			}
-			continue
-		}
-
-		if value == "" && opts.FailOnError {
-			result.Errors = append(result.Errors, key)
-			return result, fmt.Errorf("compute: rule %q produced an empty value", key)
-		}
-
-		if _, exists := working[key]; exists && !opts.Overwrite {
-			result.Skipped = append(result.Skipped, key)
-			continue
-		}
-
-		working[key] = value
-		result.Added = append(result.Added, key)
-	}
-
-	if !opts.DryRun {
-		for k, v := range working {
-			secrets[k] = v
+			r, err := strconv.ParseFloat(rightVal, 64)
+			if err != nil {
+				return "", fmt.Errorf("key %q is not numeric: %v", rightKey, err)
+			}
+			var res float64
+			if op == " - " {
+				res = l - r
+			} else {
+				res = l * r
+			}
+			return strconv.FormatFloat(res, 'f', -1, 64), nil
 		}
 	}
-
-	return result, nil
+	return "", fmt.Errorf("unsupported expression: %q", expr)
 }
