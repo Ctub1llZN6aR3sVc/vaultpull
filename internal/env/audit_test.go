@@ -83,3 +83,32 @@ func TestReadAuditLog_MissingFileReturnsEmpty(t *testing.T) {
 		t.Errorf("expected empty slice, got %d entries", len(entries))
 	}
 }
+
+func TestWriteAuditLog_AppendPreservesExistingEntries(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "audit.log")
+
+	first := AuditEntry{Timestamp: time.Now().UTC(), Profile: "dev", Added: 1}
+	second := AuditEntry{Timestamp: time.Now().UTC(), Profile: "prod", Added: 2}
+
+	if err := WriteAuditLog(logPath, first); err != nil {
+		t.Fatalf("first write error: %v", err)
+	}
+	if err := WriteAuditLog(logPath, second); err != nil {
+		t.Fatalf("second write error: %v", err)
+	}
+
+	entries, err := ReadAuditLog(logPath)
+	if err != nil {
+		t.Fatalf("read error: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries after append, got %d", len(entries))
+	}
+	if entries[0].Profile != "dev" {
+		t.Errorf("expected first entry profile 'dev', got %s", entries[0].Profile)
+	}
+	if entries[1].Profile != "prod" {
+		t.Errorf("expected second entry profile 'prod', got %s", entries[1].Profile)
+	}
+}
