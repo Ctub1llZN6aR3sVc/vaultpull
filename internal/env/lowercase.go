@@ -28,6 +28,11 @@ func (r LowercaseResult) Summary() string {
 	return "lowercase: changed " + joinLowercaseKeys(r.Changed)
 }
 
+// HasChanges reports whether any keys or values were modified.
+func (r LowercaseResult) HasChanges() bool {
+	return len(r.Changed) > 0
+}
+
 func joinLowercaseKeys(keys []string) string {
 	if len(keys) == 0 {
 		return ""
